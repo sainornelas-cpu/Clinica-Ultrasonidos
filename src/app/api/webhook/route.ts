@@ -55,15 +55,20 @@ export async function POST(request: NextRequest) {
     // Obtener o crear usuario en Supabase
     const supabase = createServerClient()
 
-    let user = await supabase
+    // 1. Buscar usuario por teléfono
+    let { data: existingUser, error: userFetchError } = await supabase
       .from('users')
-      .select('*')
+      .select('id')
       .eq('phone_number', from)
       .single()
 
-    if (!user.data) {
-      // Crear nuevo usuario
-      const { data: newUser, error } = await supabase
+    let userId: string
+
+    if (existingUser) {
+      userId = existingUser.id
+    } else {
+      // 2. Crear nuevo usuario si no existe
+      const { data: newUser, error: insertError } = await supabase
         .from('users')
         .insert({
           phone_number: from,
@@ -71,18 +76,17 @@ export async function POST(request: NextRequest) {
           timezone: 'America/Mexico_City',
           trust_score: 1.0
         })
-        .select()
+        .select('id')
         .single()
 
-      if (error) {
-        console.error('❌ Error creating user:', error)
-      } else {
-        user = { data: newUser }
-        console.log('✅ New user created:', newUser.id)
+      if (insertError || !newUser) {
+        console.error('❌ Error creating user:', insertError)
+        return new NextResponse('DB Error', { status: 500 })
       }
-    }
 
-    const userId = user.data?.id
+      userId = newUser.id
+      console.log('✅ New user created:', userId)
+    }
 
     // Guardar mensaje del usuario en interaction_logs
     await supabase.from('interaction_logs').insert({
