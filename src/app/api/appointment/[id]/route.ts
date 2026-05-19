@@ -2,14 +2,53 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase/client'
 import { updateAppointment, cancelAppointment } from '@/lib/calendar/sync-utils'
 
+// GET: Obtener detalles de una cita
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }  // ✅ params es Promise
+) {
+  try {
+    // ✅ Await para extraer el id
+    const { id: appointmentId } = await params
+
+    const supabase = createServerClient()
+    const { data: appointment, error } = await supabase
+      .from('appointments')
+      .select(`
+        *,
+        users (
+          phone_number,
+          full_name
+        )
+      `)
+      .eq('id', appointmentId)
+      .single()
+
+    if (error || !appointment) {
+      return NextResponse.json(
+        { error: 'Appointment not found' },
+        { status: 404 }
+      )
+    }
+
+    return NextResponse.json({ appointment })
+
+  } catch (error) {
+    console.error('❌ Error fetching appointment:', error)
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}
+
 // PUT: Actualizar/Reagendar cita
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }  // ✅ params es Promise
 ) {
-  const appointmentId = params.id
-
   try {
+    const { id: appointmentId } = await params  // ✅ Await aquí también
     const body = await request.json()
     const { start_time, reason, user_phone } = body
 
@@ -22,8 +61,9 @@ export async function PUT(
 
     console.log(`🔄 Updating appointment ${appointmentId}:`, { start_time, reason })
 
-    // Verificar que la cita existe
     const supabase = createServerClient()
+
+    // Verificar que la cita existe
     const { data: appointment, error: fetchError } = await supabase
       .from('appointments')
       .select('*')
@@ -38,7 +78,7 @@ export async function PUT(
       )
     }
 
-    // Verificación opcional por phone_number (si se proporciona)
+    // Verificación opcional por phone_number
     if (user_phone) {
       const { data: user } = await supabase
         .from('users')
@@ -54,7 +94,7 @@ export async function PUT(
       }
     }
 
-    // Actualizar cita usando sync-utils
+    // Actualizar cita
     const updated = await updateAppointment(
       appointmentId,
       start_time,
@@ -79,11 +119,10 @@ export async function PUT(
 // DELETE: Cancelar cita
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }  // ✅ params es Promise
 ) {
-  const appointmentId = params.id
-
   try {
+    const { id: appointmentId } = await params  // ✅ Await aquí también
     const body = await request.json()
     const { reason, user_phone } = body
 
@@ -127,46 +166,6 @@ export async function DELETE(
 
   } catch (error) {
     console.error('❌ Error cancelling appointment:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
-  }
-}
-
-// GET: Obtener detalles de una cita
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  const appointmentId = params.id
-
-  try {
-    const supabase = createServerClient()
-    const { data: appointment, error } = await supabase
-      .from('appointments')
-      .select(`
-        *,
-        users (
-          phone_number,
-          full_name,
-          email
-        )
-      `)
-      .eq('id', appointmentId)
-      .single()
-
-    if (error || !appointment) {
-      return NextResponse.json(
-        { error: 'Appointment not found' },
-        { status: 404 }
-      )
-    }
-
-    return NextResponse.json({ appointment })
-
-  } catch (error) {
-    console.error('❌ Error fetching appointment:', error)
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
