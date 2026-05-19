@@ -34,6 +34,9 @@ async function sendRemindersByHours(hours: number, reminderType: '24h' | '3h') {
 
   console.log(`📅 Checking for ${hours}h reminders...`)
 
+  // Determinar qué campo verificar según el tipo de recordatorio
+  const reminderField = reminderType === '24h' ? 'reminder_24h_sent' : 'reminder_3h_sent'
+
   // Obtener citas confirmadas que aún no han sido recordadas
   const { data: appointments, error } = await supabase
     .from('appointments')
@@ -47,8 +50,7 @@ async function sendRemindersByHours(hours: number, reminderType: '24h' | '3h') {
     .eq('status', 'confirmed')
     .gte('start_time', new Date(targetTime.getTime() - timeWindow).toISOString())
     .lte('start_time', new Date(targetTime.getTime() + timeWindow).toISOString())
-    .is(reminderType === '24h' ? 'reminder_24h_sent', false)
-    .is(reminderType === '3h' ? 'reminder_3h_sent', false)
+    .is(reminderField, false)  // ✅ Filtro correcto con variable dinámica
 
   if (error) {
     console.error('❌ Error fetching appointments:', error)
@@ -68,11 +70,10 @@ async function sendRemindersByHours(hours: number, reminderType: '24h' | '3h') {
       await sendReminder(appointment, hours)
 
       // Marcar como enviado
-      const updateField = reminderType === '24h' ? 'reminder_24h_sent' : 'reminder_3h_sent'
       await supabase
         .from('appointments')
-        .update({ [updateField]: true })
-        .eq('id', appointment.id})
+        .update({ [reminderField]: true })  // ✅ Actualizar el campo correcto
+        .eq('id', appointment.id)
 
     } catch (error) {
       console.error(`❌ Error sending reminder for ${appointment.id}:`, error)
