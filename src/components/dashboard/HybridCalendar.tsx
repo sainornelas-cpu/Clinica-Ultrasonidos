@@ -51,16 +51,20 @@ export default function HybridCalendar({ ownerId }: HybridCalendarProps) {
           (payload) => {
             console.log('🔔 Realtime change:', payload)
 
-            if (payload.eventType === 'INSERT') {
-              setEvents((prev) => [...prev, formatEvent(payload.new)])
-            } else if (payload.eventType === 'UPDATE') {
+            // ✅ Doble cast para puente entre Supabase (loose) y TypeScript (strict)
+            const newData = payload.new as unknown as Appointment
+            const oldData = payload.old as unknown as Appointment
+
+            if (payload.eventType === 'INSERT' && newData) {
+              setEvents((prev) => [...prev, formatEvent(newData)])
+            } else if (payload.eventType === 'UPDATE' && newData) {
               setEvents((prev) =>
                 prev.map((event) =>
-                  event.id === payload.new.id ? formatEvent(payload.new) : event
+                  event.id === newData.id ? formatEvent(newData) : event
                 )
               )
-            } else if (payload.eventType === 'DELETE') {
-              setEvents((prev) => prev.filter((event) => event.id !== payload.old.id))
+            } else if (payload.eventType === 'DELETE' && oldData) {
+              setEvents((prev) => prev.filter((event) => event.id !== oldData.id))
             }
           }
         )
