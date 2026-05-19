@@ -4,21 +4,40 @@ import OpenAI from 'openai'
 
 // WhatsApp Webhook Handler
 export async function GET(request: NextRequest) {
-  console.log('🔔 Webhook GET hit - Meta verification')
-
+  // 🔥 DEBUG AGRESIVO: Ver qué está pasando
+  const verifyTokenEnv = process.env.WHATSAPP_VERIFY_TOKEN
   const searchParams = request.nextUrl.searchParams
+
   const hubMode = searchParams.get('hub.mode')
   const hubVerifyToken = searchParams.get('hub.verify_token')
   const hubChallenge = searchParams.get('hub.challenge')
 
-  // Verificar token
-  if (hubMode === 'subscribe' && hubVerifyToken === process.env.WHATSAPP_VERIFY_TOKEN) {
-    console.log('✅ Webhook verified successfully')
-    return new NextResponse(hubChallenge, { status: 200 })
-  } else {
-    console.error('❌ Webhook verification failed')
-    return new NextResponse('Forbidden', { status: 403 })
+  console.log('🔥 [WEBHOOK DEBUG] ========================')
+  console.log('🔥 WHATSAPP_VERIFY_TOKEN from env:', JSON.stringify(verifyTokenEnv))
+  console.log('🔥 Length:', verifyTokenEnv?.length)
+  console.log('🔥 hub.verify_token from Meta:', JSON.stringify(hubVerifyToken))
+  console.log('🔥 hub.mode:', hubMode)
+  console.log('🔥 Do they match EXACTLY?:', verifyTokenEnv === hubVerifyToken)
+  console.log('🔥 Do they match after trim?:', verifyTokenEnv?.trim() === hubVerifyToken?.trim())
+  console.log('🔥 [END DEBUG] ============================')
+
+  // ✅ FIX: Usar trim() para ignorar espacios invisibles
+  if (hubMode === 'subscribe' && verifyTokenEnv?.trim() === hubVerifyToken?.trim()) {
+    console.log('✅ Webhook verified! Challenge:', hubChallenge)
+    return new NextResponse(hubChallenge, {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain' }
+    })
   }
+
+  console.error('❌ Verification FAILED')
+  console.error('Expected (env):', JSON.stringify(verifyTokenEnv))
+  console.error('Received (Meta):', JSON.stringify(hubVerifyToken))
+
+  return new NextResponse('Forbidden', {
+    status: 403,
+    headers: { 'Content-Type': 'text/plain' }
+  })
 }
 
 export async function POST(request: NextRequest) {
