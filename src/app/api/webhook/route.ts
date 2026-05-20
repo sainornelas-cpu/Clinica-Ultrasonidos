@@ -553,6 +553,15 @@ async function createAppointmentInDb(
   // Generar UUID válido para owner_id
   const ownerId = '00000000-0000-0000-0000-000000000001'
 
+  console.log(`📝 Creando cita en Supabase:`)
+  console.log(`   userId: ${userId}`)
+  console.log(`   serviceName: ${serviceName}`)
+  console.log(`   duration: ${duration}`)
+  console.log(`   startTime: ${startTime.toISOString()}`)
+  console.log(`   endTime: ${endTime.toISOString()}`)
+  console.log(`   ownerId: ${ownerId}`)
+  console.log(`   from('appointments'): '${supabase.from('appointments')}'`)
+
   const { data, error } = await supabase
     .from('appointments')
     .insert({

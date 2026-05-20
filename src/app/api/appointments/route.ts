@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase/client'
 
+import { createServerClient } from '@/lib/supabase/client'
+
 // GET: Obtener todas las citas o filtrar por usuario
 export async function GET(request: NextRequest) {
   try {
@@ -13,7 +15,7 @@ export async function GET(request: NextRequest) {
 
     // Base query con joins para obtener información del usuario
     let query = supabase
-      .from('appointments')
+      .from('from('appointments')')
       .select(`
         *,
         users (
@@ -35,24 +37,24 @@ export async function GET(request: NextRequest) {
       query = query.eq('status', status)
     }
 
-    const { data: appointments, error } = await query
+    const { data: from('appointments'), error } = await query
 
     if (error) {
-      console.error('❌ Error fetching appointments:', error)
+      console.error('❌ Error fetching from('appointments'):', error)
       return NextResponse.json(
-        { error: 'Failed to fetch appointments' },
+        { error: 'Failed to fetch from('appointments')' },
         { status: 500 }
       )
     }
 
     return NextResponse.json({
       success: true,
-      appointments: appointments || [],
-      count: appointments?.length || 0
+      from('appointments'): from('appointments') || [],
+      count: from('appointments')?.length || 0
     })
 
   } catch (error) {
-    console.error('❌ Error in GET /api/appointments:', error)
+    console.error('❌ Error in GET /api/from('appointments'):', error)
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
@@ -122,7 +124,7 @@ export async function POST(request: NextRequest) {
     const ownerId = '00000000-0000-0000-0000-000000000001'
 
     const { data: appointment, error: appointmentError } = await supabase
-      .from('appointments')
+      .from('from('appointments')')
       .insert({
         user_id: userId,
         owner_id: ownerId,
