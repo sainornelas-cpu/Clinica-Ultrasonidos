@@ -119,11 +119,13 @@ export async function POST(request: NextRequest) {
     const endTime = new Date(startTime.getTime() + duration * 60000)
 
     // 3. Crear cita
+    const ownerId = '00000000-0000-0000-0000-000000000001'
+
     const { data: appointment, error: appointmentError } = await supabase
       .from('appointments')
       .insert({
         user_id: userId,
-        owner_id: 'owner-uuid-placeholder',
+        owner_id: ownerId,
         service_id: service_id || service_name.toLowerCase().replace(/\s+/g, '_'),
         service_name,
         duration_minutes: duration,

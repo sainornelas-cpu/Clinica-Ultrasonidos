@@ -539,11 +539,14 @@ async function createAppointmentInDb(
 
   const endTime = new Date(startTime.getTime() + duration * 60000)
 
+  // Generar UUID válido para owner_id
+  const ownerId = '00000000-0000-0000-0000-000000000001'
+
   const { data, error } = await supabase
     .from('appointments')
     .insert({
       user_id: userId,
-      owner_id: 'owner-uuid-placeholder',
+      owner_id: ownerId,
       service_id: serviceName.toLowerCase().replace(/\s+/g, '_'),
       service_name: serviceName,
       duration_minutes: duration,
