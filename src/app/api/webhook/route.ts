@@ -107,27 +107,34 @@ export async function POST(request: NextRequest) {
       console.log('✅ New user created:', userId)
     }
 
-    // Obtener estado de conversación actual (ANTES de guardar nuevo log)
-    const { data: lastInteraction } = await supabase
+    // Contar interacciones previas del usuario para determinar si es primer mensaje
+    const { count: interactionCount } = await supabase
       .from('interaction_logs')
-      .select('state_after, state_before, content, role')
+      .select('*', { count: 'exact', head: false })
       .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(1)
       .single()
 
-    // El estado real es state_before del último log (no state_after que siempre es 'processing')
-    const conversationState = lastInteraction?.state_before || 'idle'
+    const isFirstMessage = !interactionCount || interactionCount === 0
 
-    // Verificar si es el primer mensaje (no hay logs previos)
-    const { data: previousLogs } = await supabase
-      .from('interaction_logs')
-      .select('id')
-      .eq('user_id', userId)
-      .limit(1)
+    // Obtener estado de conversación actual
+    let conversationState = 'idle'
 
-    const isFirstMessage = !previousLogs || previousLogs.length === 0
-    console.log(`💬 User state: ${conversationState}, First message: ${isFirstMessage}, Last interaction state: ${lastInteraction?.state_after}`)
+    if (!isFirstMessage) {
+      const { data: lastInteraction } = await supabase
+        .from('interaction_logs')
+        .select('state_after, state_before, content, role')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      // El estado real es state_before del último log
+      conversationState = lastInteraction?.state_before || 'idle'
+
+      console.log(`💬 Interaction #${interactionCount}, State: ${conversationState}, Last: ${lastInteraction?.state_after}`)
+    } else {
+      console.log(`💬 Primer mensaje - First interaction`)
+    }
 
     // Guardar mensaje del usuario en interaction_logs
     console.log('📝 Guardando interaction log para usuario...')
