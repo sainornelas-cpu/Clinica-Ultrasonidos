@@ -18,6 +18,7 @@ create table if not exists users (
   timezone text default 'America/Mexico_City',
   preferred_time_range text check (preferred_time_range in ('morning','afternoon','evening')),
   trust_score float default 1.0,
+  conversation_state text default 'idle',
   embedding vector(1536),
   metadata jsonb default '{}',
   created_at timestamptz default now(),

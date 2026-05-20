@@ -45,8 +45,7 @@ export default function HybridCalendar({ ownerId }: HybridCalendarProps) {
           {
             event: '*',
             schema: 'public',
-            table: 'appointments',
-            filter: `owner_id=eq.${ownerId}`
+            table: 'appointments'
           },
           (payload) => {
             console.log('🔔 Realtime change:', payload)
@@ -83,17 +82,16 @@ export default function HybridCalendar({ ownerId }: HybridCalendarProps) {
   async function loadAppointments() {
     setIsLoading(true)
     try {
-      const { data, error } = await supabase
-        .from('appointments')
-        .select('*')
-        .eq('owner_id', ownerId)
-        .eq('status', 'confirmed')
-        .order('start_time', { ascending: true })
+      const response = await fetch('/api/appointments')
+      const data = await response.json()
 
-      if (error) throw error
-
-      const formattedEvents = data.map(formatEvent)
-      setEvents(formattedEvents)
+      if (data.success) {
+        const confirmedAppointments = data.appointments.filter((apt: any) =>
+          apt.status === 'confirmed' || apt.status === 'rescheduled'
+        )
+        const formattedEvents = confirmedAppointments.map(formatEvent)
+        setEvents(formattedEvents)
+      }
     } catch (error) {
       console.error('❌ Error loading appointments:', error)
     } finally {
