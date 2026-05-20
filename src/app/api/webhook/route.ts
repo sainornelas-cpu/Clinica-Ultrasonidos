@@ -107,16 +107,7 @@ export async function POST(request: NextRequest) {
       console.log('✅ New user created:', userId)
     }
 
-    // Verificar si es el primer mensaje (no hay logs previos)
-    const { data: previousLogs } = await supabase
-      .from('interaction_logs')
-      .select('id')
-      .eq('user_id', userId)
-      .limit(1)
-
-    const isFirstMessage = !previousLogs || previousLogs.length === 0
-
-    // Obtener estado de conversación actual
+    // Obtener estado de conversación actual (ANTES de guardar nuevo log)
     const { data: lastInteraction } = await supabase
       .from('interaction_logs')
       .select('state_after, content, role')
@@ -125,8 +116,18 @@ export async function POST(request: NextRequest) {
       .limit(1)
       .single()
 
-    const conversationState = lastInteraction?.state_after || 'idle'
-    console.log(`💬 User state: ${conversationState}, First message: ${isFirstMessage}`)
+    // El estado real es state_before del último log (no state_after que siempre es 'processing')
+    const conversationState = lastInteraction?.state_before || 'idle'
+
+    // Verificar si es el primer mensaje (no hay logs previos)
+    const { data: previousLogs } = await supabase
+      .from('interaction_logs')
+      .select('id')
+      .eq('user_id', userId)
+      .limit(1)
+
+    const isFirstMessage = !previousLogs || previousLogs.length === 0
+    console.log(`💬 User state: ${conversationState}, First message: ${isFirstMessage}, Last interaction state: ${lastInteraction?.state_after}`)
 
     // Guardar mensaje del usuario en interaction_logs
     console.log('📝 Guardando interaction log para usuario...')
