@@ -358,6 +358,7 @@ async function handleBookingFlow(
       .from('users')
       .update({ full_name: trimmedMessage })
       .eq('id', userId)
+      .select()
 
     // Mover al siguiente estado
     await updateConversationState(userId, 'booking_service', supabase)
@@ -545,6 +546,7 @@ async function updateConversationState(userId: string, state: string, supabase: 
       .from('users')
       .update({ conversation_state: state })
       .eq('id', userId)
+      .select()
   } catch (error) {
     console.warn('⚠️ Could not update conversation_state (column may not exist):', error)
   }
