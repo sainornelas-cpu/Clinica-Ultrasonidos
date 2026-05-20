@@ -651,7 +651,7 @@ async function getOpenAIResponse(
 
   const completion = await openai.chat.completions.create({
     model: 'gpt-4',
-    messages,
+    messages: messages as any,
     temperature: 0.7,
     max_tokens: 500
   })
