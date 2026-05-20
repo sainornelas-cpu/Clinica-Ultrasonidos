@@ -129,7 +129,8 @@ export async function POST(request: NextRequest) {
     console.log(`💬 User state: ${conversationState}, First message: ${isFirstMessage}`)
 
     // Guardar mensaje del usuario en interaction_logs
-    await supabase.from('interaction_logs').insert({
+    console.log('📝 Guardando interaction log para usuario...')
+    const { error: logError } = await supabase.from('interaction_logs').insert({
       user_id: userId,
       role: 'user',
       content: userMessage,
@@ -137,6 +138,12 @@ export async function POST(request: NextRequest) {
       state_before: conversationState,
       state_after: 'processing'
     })
+
+    if (logError) {
+      console.error('❌ Error inserting interaction log:', logError)
+    } else {
+      console.log('✅ Interaction log guardado')
+    }
 
     // Generar respuesta basada en el contexto
     let aiResponse: string
@@ -161,7 +168,8 @@ export async function POST(request: NextRequest) {
     console.log(`🤖 Response: ${aiResponse}`)
 
     // Guardar respuesta en interaction_logs
-    await supabase.from('interaction_logs').insert({
+    console.log('📝 Guardando interaction log para assistant...')
+    const { error: assistantLogError } = await supabase.from('interaction_logs').insert({
       user_id: userId,
       role: 'assistant',
       content: aiResponse,
@@ -170,7 +178,14 @@ export async function POST(request: NextRequest) {
       state_after: 'idle'
     })
 
+    if (assistantLogError) {
+      console.error('❌ Error inserting assistant log:', assistantLogError)
+    } else {
+      console.log('✅ Assistant interaction log guardado')
+    }
+
     // Enviar respuesta vía WhatsApp API
+    console.log('📤 Enviando respuesta a WhatsApp...')
     await sendWhatsAppMessage(from, aiResponse)
 
     return new NextResponse('OK', { status: 200 })
@@ -533,9 +548,11 @@ async function createAppointmentInDb(
 
   if (error) {
     console.error('❌ Error creating appointment:', error)
+    console.error('❌ Error details:', JSON.stringify(error, null, 2))
     throw error
   }
 
+  console.log('✅ Cita creada exitosamente, ID:', data.id)
   return data.id
 }
 
