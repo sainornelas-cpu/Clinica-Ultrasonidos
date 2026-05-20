@@ -177,13 +177,24 @@ export async function POST(request: NextRequest) {
 
     // Guardar respuesta en interaction_logs
     console.log('📝 Guardando interaction log para assistant...')
+
+    // Determinar el estado final correcto basado en la respuesta
+    let finalState = 'idle'
+    if (aiResponse.includes('nombre completo')) {
+      finalState = 'booking_name'
+    } else if (aiResponse.includes('Selecciona el servicio')) {
+      finalState = 'booking_service'
+    } else if (aiResponse.includes('indica la **fecha**')) {
+      finalState = 'booking_date'
+    }
+
     const { error: assistantLogError } = await supabase.from('interaction_logs').insert({
       user_id: userId,
       role: 'assistant',
       content: aiResponse,
       intent_detected: 'response',
-      state_before: 'processing',
-      state_after: 'idle'
+      state_before: conversationState,
+      state_after: finalState
     })
 
     if (assistantLogError) {
