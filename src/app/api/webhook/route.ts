@@ -146,13 +146,13 @@ export async function POST(request: NextRequest) {
       aiResponse = generateWelcomeMessage()
     } else if (isMenuOption(userMessage)) {
       // Opción del menú (1-5)
-      aiResponse = handleMenuOption(userMessage, userId, from, supabase)
+      aiResponse = await handleMenuOption(userMessage, userId, from, supabase)
     } else if (conversationState.startsWith('booking_')) {
       // En medio del flujo de agendamiento
-      aiResponse = handleBookingFlow(userMessage, conversationState, userId, from, supabase)
+      aiResponse = await handleBookingFlow(userMessage, conversationState, userId, from, supabase)
     } else if (isGeneralCommand(userMessage)) {
       // Comando general (Mis citas, Cancelar, Reagendar)
-      aiResponse = handleGeneralCommand(userMessage, userId, supabase)
+      aiResponse = await handleGeneralCommand(userMessage, userId, supabase)
     } else {
       // Otro mensaje - usar OpenAI
       aiResponse = await getOpenAIResponse(userMessage, conversationState, userId, supabase)
@@ -279,11 +279,11 @@ function generateWelcomeMessage(): string {
 }
 
 // Manejar opción del menú
-function handleMenuOption(option: string, userId: string, phone: string, supabase: any): string {
+async function handleMenuOption(option: string, userId: string, phone: string, supabase: any): Promise<string> {
   switch (option.trim()) {
     case '1':
       // Iniciar flujo de agendamiento - actualizar estado
-      updateConversationState(userId, 'booking_name', supabase)
+      await updateConversationState(userId, 'booking_name', supabase)
       return `📅 **Para agendar tu cita, necesito algunos datos:**
 
 Por favor, escribe tu **nombre completo** para empezar.`
@@ -360,7 +360,7 @@ async function handleBookingFlow(
       .eq('id', userId)
 
     // Mover al siguiente estado
-    updateConversationState(userId, 'booking_service', supabase)
+    await updateConversationState(userId, 'booking_service', supabase)
 
     return `✅ Nombre registrado: **${trimmedMessage}**
 
@@ -393,7 +393,7 @@ Responde con el número del servicio.`
     await saveBookingData(userId, 'service', JSON.stringify(service), supabase)
 
     // Mover al siguiente estado
-    updateConversationState(userId, 'booking_date', supabase)
+    await updateConversationState(userId, 'booking_date', supabase)
 
     return `📅 **Servicio seleccionado:** ${service.name} - ${service.price}
 
@@ -421,7 +421,7 @@ Ejemplo: *Mañana a las 10am* o *Viernes 25 de mayo a las 3pm*`
     )
 
     // Resetear estado
-    updateConversationState(userId, 'idle', supabase)
+    await updateConversationState(userId, 'idle', supabase)
 
     return `✅ **¡Cita confirmada!**
 
