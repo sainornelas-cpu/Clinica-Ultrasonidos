@@ -126,7 +126,7 @@ export async function POST(request: NextRequest) {
     })
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
+      model: 'gpt-4',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage }
