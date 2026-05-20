@@ -373,9 +373,11 @@ async function handleBookingFlow(
   phone: string,
   supabase: any
 ): Promise<string> {
+  console.log(`🔄 handleBookingFlow: currentState=${currentState}, message="${message.trim()}"`)
   const trimmedMessage = message.trim()
 
   if (currentState === 'booking_name') {
+    console.log('📝 Entrando en booking_name flow')
     // Guardar nombre en perfil del usuario
     await supabase
       .from('users')
