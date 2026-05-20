@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
     // Obtener estado de conversación actual (ANTES de guardar nuevo log)
     const { data: lastInteraction } = await supabase
       .from('interaction_logs')
-      .select('state_after, content, role')
+      .select('state_after, state_before, content, role')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(1)
