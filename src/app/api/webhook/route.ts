@@ -164,7 +164,7 @@ async function loadSystemPrompt(): Promise<string> {
   try {
     const fs = await import('fs/promises')
     const path = await import('path')
-    const promptPath = path.join(process.cwd(), 'lib', 'prompts', 'agent-system.md')
+    const promptPath = path.join(process.cwd(), 'src', 'lib', 'prompts', 'agent-system.md')
     return await fs.readFile(promptPath, 'utf-8')
   } catch (error) {
     console.error('⚠️ Could not load system prompt, using fallback')
