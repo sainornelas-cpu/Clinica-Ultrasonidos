@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase/client'
 import { CONVERSATION_STATES } from '@/lib/constants/conversation-states'
 import { SERVICES, CLINIC_INFO, OWNER_ID } from '@/lib/constants/services'
+import { checkAvailability } from '@/lib/availability/check-availability'
 import OpenAI from 'openai'
 
 // =================== WEBHOOK HANDLERS ===================
@@ -209,7 +210,24 @@ async function handleBookingFlow(message: string, state: string, userId: string,
     case CONVERSATION_STATES.BOOKING_DATE:
       const bookingData = await getBookingData(userId, supabase)
       const service = JSON.parse(bookingData?.service || '{}')
-      const appointmentId = await createAppointment(userId, service.name, service.duration, trimmed, supabase)
+
+      // ⚠️ Verificar disponibilidad OBLIGATORIO
+      const availability = await checkAvailability(trimmed, service.duration)
+
+      if (!availability.available) {
+        const errorResponse = `${availability.message}\n\n${availability.suggestedSlots?.join('\n') || ''}`;
+        return errorResponse;
+      }
+
+      // Si está disponible, crear la cita
+      const appointmentId = await createAppointment(
+        userId,
+        service.name,
+        service.duration,
+        availability.parsedDate!,
+        trimmed,
+        supabase
+      )
       await updateConversationState(userId, CONVERSATION_STATES.IDLE, supabase)
       return getBookingConfirmation(service, trimmed, appointmentId)
 
@@ -380,13 +398,10 @@ async function createAppointment(
   userId: string,
   serviceName: string,
   duration: number,
+  startTime: Date,
   dateText: string,
   supabase: any
 ): Promise<string> {
-  const startTime = new Date()
-  startTime.setDate(startTime.getDate() + 1)
-  startTime.setHours(10, 0, 0, 0)
-
   const endTime = new Date(startTime.getTime() + duration * 60000)
 
   const { data, error } = await supabase
