@@ -186,7 +186,7 @@ async function generateResponse(
 
   // Prioridad 6: Mensaje genérico en idle
   if (state === CONVERSATION_STATES.IDLE) {
-    return getWelcomeMessage()
+    return getWelcomeMessage(existingUser?.full_name)
   }
 
   // Fallback: OpenAI
@@ -195,8 +195,43 @@ async function generateResponse(
 
 // =================== FLOW HANDLERS ===================
 
+// Verifica si el mensaje es un comando que debe salir del flujo de booking
+function isBookingExitCommand(message: string): boolean {
+  const lower = message.toLowerCase().trim()
+  // Comandos que interrumpen el flujo de booking
+  return ['1', '2', '3', '4', '5', '6'].includes(message.trim()) ||
+         lower.includes('cancelar') ||
+         lower.includes('menú') ||
+         lower.includes('menu') ||
+         lower.includes('mis citas') ||
+         lower.includes('reagendar')
+}
+
 async function handleBookingFlow(message: string, state: string, userId: string, supabase: any): Promise<string> {
   const trimmed = message.trim()
+  const lower = message.toLowerCase().trim()
+
+  // ⚠️ VERIFICAR COMANDOS DE SALIDA ANTES DE PROCESAR
+  if (isBookingExitCommand(message)) {
+    // Salir del flujo de booking y regresar a idle
+    await updateConversationState(userId, CONVERSATION_STATES.IDLE, supabase)
+    // Procesar como comando de menú
+    if (['1', '2', '3', '4', '5', '6'].includes(trimmed)) {
+      return await handleMenuOption(trimmed, userId, supabase)
+    }
+    if (lower.includes('cancelar')) {
+      return await handleGeneralCommand('cancelar', userId, supabase)
+    }
+    if (lower.includes('mis citas')) {
+      return await handleGeneralCommand('mis citas', userId, supabase)
+    }
+    if (lower.includes('reagendar')) {
+      return await handleGeneralCommand('reagendar', userId, supabase)
+    }
+    if (lower.includes('menu') || lower.includes('menú')) {
+      return getWelcomeMessage() // Mostrar menú principal
+    }
+  }
 
   switch (state) {
     case CONVERSATION_STATES.BOOKING_NAME:
@@ -243,6 +278,12 @@ async function handleBookingFlow(message: string, state: string, userId: string,
 }
 
 async function handleMenuOption(option: string, userId: string, supabase: any): Promise<string> {
+  const { data: user } = await supabase
+    .from('users')
+    .select('full_name')
+    .eq('id', userId)
+    .maybeSingle()
+
   switch (option.trim()) {
     case '1':
       await updateConversationState(userId, CONVERSATION_STATES.BOOKING_NAME, supabase)
@@ -350,7 +391,12 @@ Te esperamos en:
 📍 ${CLINIC_INFO.address}
 📞 ${CLINIC_INFO.phone}
 
-¿Algo más en lo que te pueda ayudar?`
+¿Algo más en lo que pueda ayudar?
+
+📋 **Opciones:**
+1️⃣ Agendar otra cita
+2️⃣ Ver mis citas
+3️⃣ Volver al menú principal`
 }
 
 function getPricesMenu(): string {
