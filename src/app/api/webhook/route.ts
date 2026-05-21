@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase/client'
+import { CONVERSATION_STATES, detectStateFromResponse } from '@/lib/constants/conversation-states'
 import OpenAI from 'openai'
 
 // WhatsApp Webhook Handler
@@ -107,34 +108,20 @@ export async function POST(request: NextRequest) {
       console.log('✅ New user created:', userId)
     }
 
-    // Contar interacciones previas del usuario para determinar si es primer mensaje
-    const { count: interactionCount } = await supabase
+    // Obtener estado de conversación actual - buscar última interacción del assistant
+    const { data: lastInteraction } = await supabase
       .from('interaction_logs')
-      .select('*', { count: 'exact', head: false })
+      .select('state_after')
       .eq('user_id', userId)
+      .eq('role', 'assistant')
+      .order('created_at', { ascending: false })
+      .limit(1)
       .single()
 
-    const isFirstMessage = !interactionCount || interactionCount === 0
+    const conversationState = lastInteraction?.state_after || CONVERSATION_STATES.IDLE
+    const isFirstMessage = !lastInteraction
 
-    // Obtener estado de conversación actual
-    let conversationState = 'idle'
-
-    if (!isFirstMessage) {
-      const { data: lastInteraction } = await supabase
-        .from('interaction_logs')
-        .select('state_after, state_before, content, role')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single()
-
-      // El estado real es state_before del último log
-      conversationState = lastInteraction?.state_before || 'idle'
-
-      console.log(`💬 Interaction #${interactionCount}, State: ${conversationState}, Last: ${lastInteraction?.state_after}`)
-    } else {
-      console.log(`💬 Primer mensaje - First interaction`)
-    }
+    console.log(`💬 State: ${conversationState}, FirstMessage: ${isFirstMessage}`)
 
     // Guardar mensaje del usuario en interaction_logs
     console.log('📝 Guardando interaction log para usuario...')
@@ -144,7 +131,7 @@ export async function POST(request: NextRequest) {
       content: userMessage,
       intent_detected: detectIntent(userMessage, conversationState),
       state_before: conversationState,
-      state_after: 'processing'
+      state_after: CONVERSATION_STATES.PROCESSING
     })
 
     if (logError) {
@@ -162,7 +149,7 @@ export async function POST(request: NextRequest) {
     } else if (isMenuOption(userMessage)) {
       // Opción del menú (1-5)
       aiResponse = await handleMenuOption(userMessage, userId, from, supabase)
-    } else if (conversationState.startsWith('booking_')) {
+    } else if (conversationState.startsWith(CONVERSATION_STATES.BOOKING_NAME.substring(0, 7))) {
       // En medio del flujo de agendamiento
       aiResponse = await handleBookingFlow(userMessage, conversationState, userId, from, supabase)
     } else if (isGeneralCommand(userMessage)) {
@@ -179,14 +166,7 @@ export async function POST(request: NextRequest) {
     console.log('📝 Guardando interaction log para assistant...')
 
     // Determinar el estado final correcto basado en la respuesta
-    let finalState = 'idle'
-    if (aiResponse.includes('nombre completo')) {
-      finalState = 'booking_name'
-    } else if (aiResponse.includes('Selecciona el servicio')) {
-      finalState = 'booking_service'
-    } else if (aiResponse.includes('indica la **fecha**')) {
-      finalState = 'booking_date'
-    }
+    const finalState = detectStateFromResponse(aiResponse)
 
     const { error: assistantLogError } = await supabase.from('interaction_logs').insert({
       user_id: userId,
@@ -280,9 +260,9 @@ function detectIntent(message: string, currentState: string): string {
   if (lowerMessage.includes('agendar')) return 'book_appointment'
 
   // Booking flow
-  if (currentState === 'booking_service') return 'select_service'
-  if (currentState === 'booking_date') return 'select_date'
-  if (currentState === 'booking_name') return 'provide_name'
+  if (currentState === CONVERSATION_STATES.BOOKING_SERVICE) return 'select_service'
+  if (currentState === CONVERSATION_STATES.BOOKING_DATE) return 'select_date'
+  if (currentState === CONVERSATION_STATES.BOOKING_NAME) return 'provide_name'
 
   return 'general_query'
 }
@@ -317,7 +297,7 @@ async function handleMenuOption(option: string, userId: string, phone: string, s
   switch (option.trim()) {
     case '1':
       // Iniciar flujo de agendamiento - actualizar estado
-      await updateConversationState(userId, 'booking_name', supabase)
+      await updateConversationState(userId, CONVERSATION_STATES.BOOKING_NAME, supabase)
       return `📅 **Para agendar tu cita, necesito algunos datos:**
 
 Por favor, escribe tu **nombre completo** para empezar.`
@@ -387,7 +367,7 @@ async function handleBookingFlow(
   console.log(`🔄 handleBookingFlow: currentState=${currentState}, message="${message.trim()}"`)
   const trimmedMessage = message.trim()
 
-  if (currentState === 'booking_name') {
+  if (currentState === CONVERSATION_STATES.BOOKING_NAME) {
     console.log('📝 Entrando en booking_name flow')
     // Guardar nombre en perfil del usuario
     await supabase
@@ -397,7 +377,7 @@ async function handleBookingFlow(
       .select()
 
     // Mover al siguiente estado
-    await updateConversationState(userId, 'booking_service', supabase)
+    await updateConversationState(userId, CONVERSATION_STATES.BOOKING_SERVICE, supabase)
 
     return `✅ Nombre registrado: **${trimmedMessage}**
 
@@ -412,7 +392,7 @@ async function handleBookingFlow(
 Responde con el número del servicio.`
   }
 
-  if (currentState === 'booking_service') {
+  if (currentState === CONVERSATION_STATES.BOOKING_SERVICE) {
     const services: Record<string, { name: string; price: string; duration: number }> = {
       '1': { name: 'Consulta General', price: '$500', duration: 30 },
       '2': { name: 'Ultrasonido Ginecológico', price: '$1,200', duration: 45 },
@@ -430,7 +410,7 @@ Responde con el número del servicio.`
     await saveBookingData(userId, 'service', JSON.stringify(service), supabase)
 
     // Mover al siguiente estado
-    await updateConversationState(userId, 'booking_date', supabase)
+    await updateConversationState(userId, CONVERSATION_STATES.BOOKING_DATE, supabase)
 
     return `📅 **Servicio seleccionado:** ${service.name} - ${service.price}
 
@@ -439,7 +419,7 @@ Por favor, indica la **fecha y hora** deseada para tu cita.
 Ejemplo: *Mañana a las 10am* o *Viernes 25 de mayo a las 3pm*`
   }
 
-  if (currentState === 'booking_date') {
+  if (currentState === CONVERSATION_STATES.BOOKING_DATE) {
     // Obtener datos de la cita en progreso
     const bookingData = await getBookingData(userId, supabase)
     const service = JSON.parse(bookingData?.service || '{}')
@@ -458,7 +438,7 @@ Ejemplo: *Mañana a las 10am* o *Viernes 25 de mayo a las 3pm*`
     )
 
     // Resetear estado
-    await updateConversationState(userId, 'idle', supabase)
+    await updateConversationState(userId, CONVERSATION_STATES.IDLE, supabase)
 
     return `✅ **¡Cita confirmada!**
 
@@ -610,8 +590,8 @@ async function saveBookingData(userId: string, key: string, value: string, supab
     role: 'system',
     content: `booking_data_${key}:${value}`,
     intent_detected: 'booking_data',
-    state_before: 'processing',
-    state_after: 'processing'
+    state_before: CONVERSATION_STATES.PROCESSING,
+    state_after: CONVERSATION_STATES.PROCESSING
   })
 }
 
@@ -629,7 +609,8 @@ async function getBookingData(userId: string, supabase: any) {
 
   if (data) {
     data.forEach((log: any) => {
-      const match = log.content.match(/booking_data_(.+):(.+)/)
+      // Usar non-greedy match (.*?) para capturar solo hasta el primer ":"
+      const match = log.content.match(/^booking_data_(.+?):(.+)$/s)
       if (match) {
         result[match[1]] = match[2]
       }
