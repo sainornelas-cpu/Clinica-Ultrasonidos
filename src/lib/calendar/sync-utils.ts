@@ -26,7 +26,6 @@ export interface AppointmentData {
 
 /**
  * Verificar disponibilidad en calendario
- * Usa Google Calendar freeBusy API o Cal.com
  */
 export async function checkAvailability(
   serviceId: string,
@@ -34,26 +33,17 @@ export async function checkAvailability(
   durationMinutes: number,
   timezone: string = 'America/Mexico_City'
 ): Promise<{ start: string; end: string }[]> {
-  console.log('🔍 Checking availability:', { serviceId, dateRange, durationMinutes })
-
   try {
-    // OPCIÓN A: Google Calendar FreeBusy API
     const busyTimes = await fetchBusyTimes(dateRange, timezone)
-
-    // OPCIÓN B: Cal.com (descomentar si usas Cal.com)
-    // const busyTimes = await fetchCalcomBusyTimes(dateRange)
-
-    // Generar slots disponibles
     const availableSlots = generateAvailableSlots(
       dateRange,
       busyTimes,
       durationMinutes,
       timezone
     )
-
     return availableSlots
   } catch (error) {
-    console.error('❌ Error checking availability:', error)
+    console.error('Error checking availability:', error)
     return []
   }
 }
@@ -65,11 +55,9 @@ async function fetchBusyTimes(
   dateRange: { start: string; end: string },
   timezone: string
 ): Promise<BusyTime[]> {
-  const calendarId = process.env.GOOGLE_CALENDAR_CLIENT_ID || 'primary'
   const accessToken = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN
 
   if (!accessToken) {
-    console.warn('⚠️ No Google Calendar access token, returning empty busy times')
     return []
   }
 
@@ -86,7 +74,7 @@ async function fetchBusyTimes(
           timeMin: dateRange.start,
           timeMax: dateRange.end,
           timeZone: timezone,
-          items: [{ id: calendarId }]
+          items: [{ id: 'primary' }]
         })
       }
     )
@@ -96,12 +84,9 @@ async function fetchBusyTimes(
     }
 
     const data = await response.json()
-    const busy = data.calendars?.[calendarId]?.busy || []
-
-    console.log('📅 Busy times:', busy)
-    return busy
+    return data.calendars?.primary?.busy || []
   } catch (error) {
-    console.error('❌ Error fetching busy times:', error)
+    console.error('Error fetching busy times:', error)
     return []
   }
 }
@@ -116,8 +101,6 @@ function generateAvailableSlots(
   timezone: string
 ): { start: string; end: string }[] {
   const slots: { start: string; end: string }[] = []
-
-  // Horario de trabajo: 9am - 7pm
   const workStartHour = 9
   const workEndHour = 19
   const bufferMinutes = 15
@@ -125,16 +108,14 @@ function generateAvailableSlots(
   const startDate = new Date(dateRange.start)
   const endDate = new Date(dateRange.end)
 
-  // Iterar por cada día en el rango
   for (
     let date = new Date(startDate);
     date <= endDate;
     date.setDate(date.getDate() + 1)
   ) {
-    // Saltar fines de semana (opcional)
+    // Saltar fines de semana
     if (date.getDay() === 0 || date.getDay() === 6) continue
 
-    // Generar slots para este día
     for (let hour = workStartHour; hour < workEndHour; hour++) {
       for (let minute = 0; minute < 60; minute += 30) {
         const slotStart = new Date(date)
@@ -143,7 +124,6 @@ function generateAvailableSlots(
         const slotEnd = new Date(slotStart)
         slotEnd.setMinutes(slotStart.getMinutes() + durationMinutes + bufferMinutes)
 
-        // Verificar si no se traslapa con busy times
         const isBusy = busyTimes.some((busy) => {
           const busyStart = new Date(busy.start)
           const busyEnd = new Date(busy.end)
@@ -160,7 +140,7 @@ function generateAvailableSlots(
     }
   }
 
-  return slots.slice(0, 10) // Retornar máx 10 slots
+  return slots.slice(0, 10)
 }
 
 /**
@@ -170,15 +150,13 @@ export async function createAppointment(data: AppointmentData) {
   const supabase = createServerClient()
 
   try {
-    // 1. Crear evento en Google Calendar
     const calendarEventId = await createCalendarEvent(data)
 
-    // 2. Guardar en Supabase
     const { data: appointment, error } = await supabase
       .from('appointments')
       .insert({
         user_id: data.userId,
-        owner_id: 'owner-uuid-placeholder', // Reemplazar con owner real
+        owner_id: 'owner-uuid-placeholder',
         service_id: data.serviceId,
         service_name: data.serviceName,
         duration_minutes: data.duration,
@@ -195,22 +173,9 @@ export async function createAppointment(data: AppointmentData) {
 
     if (error) throw error
 
-    // 3. Crear alerta para el dueño
-    await supabase.from('owner_alerts').insert({
-      appointment_id: appointment.id,
-      alert_type: 'new_booking',
-      payload: {
-        service: data.serviceName,
-        start_time: data.startTime,
-        patient_phone: data.userId
-      },
-      notified: false
-    })
-
-    console.log('✅ Appointment created:', appointment.id)
     return appointment
   } catch (error) {
-    console.error('❌ Error creating appointment:', error)
+    console.error('Error creating appointment:', error)
     throw error
   }
 }
@@ -222,7 +187,6 @@ async function createCalendarEvent(data: AppointmentData): Promise<string> {
   const accessToken = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN
 
   if (!accessToken) {
-    console.warn('⚠️ No Google Calendar token, returning placeholder ID')
     return `local-${Date.now()}`
   }
 
@@ -249,8 +213,8 @@ async function createCalendarEvent(data: AppointmentData): Promise<string> {
           reminders: {
             useDefault: false,
             overrides: [
-              { method: 'popup', minutes: 180 }, // 3 horas antes
-              { method: 'email', minutes: 1440 }  // 24 horas antes
+              { method: 'popup', minutes: 180 },
+              { method: 'email', minutes: 1440 }
             ]
           }
         })
@@ -262,10 +226,9 @@ async function createCalendarEvent(data: AppointmentData): Promise<string> {
     }
 
     const event = await response.json()
-    console.log('📅 Calendar event created:', event.id)
     return event.id
   } catch (error) {
-    console.error('❌ Error creating calendar event:', error)
+    console.error('Error creating calendar event:', error)
     throw error
   }
 }
@@ -281,7 +244,6 @@ export async function updateAppointment(
   const supabase = createServerClient()
 
   try {
-    // 1. Obtener cita actual
     const { data: appointment, error: fetchError } = await supabase
       .from('appointments')
       .select('*')
@@ -290,7 +252,6 @@ export async function updateAppointment(
 
     if (fetchError) throw fetchError
 
-    // 2. Actualizar en Google Calendar
     if (appointment.calendar_event_id) {
       await updateCalendarEvent(appointment.calendar_event_id, {
         start: newStartTime,
@@ -298,7 +259,6 @@ export async function updateAppointment(
       })
     }
 
-    // 3. Actualizar en Supabase
     const { data: updated, error: updateError } = await supabase
       .from('appointments')
       .update({
@@ -314,28 +274,13 @@ export async function updateAppointment(
 
     if (updateError) throw updateError
 
-    // 4. Crear alerta
-    await supabase.from('owner_alerts').insert({
-      appointment_id: appointmentId,
-      alert_type: 'reschedule',
-      payload: {
-        old_time: appointment.start_time,
-        new_time: newStartTime,
-        reason
-      }
-    })
-
-    console.log('✅ Appointment updated:', appointmentId)
     return updated
   } catch (error) {
-    console.error('❌ Error updating appointment:', error)
+    console.error('Error updating appointment:', error)
     throw error
   }
 }
 
-/**
- * Actualizar evento en Google Calendar
- */
 async function updateCalendarEvent(
   eventId: string,
   updates: { start: string; duration: number }
@@ -366,7 +311,7 @@ async function updateCalendarEvent(
       }
     )
   } catch (error) {
-    console.error('❌ Error updating calendar event:', error)
+    console.error('Error updating calendar event:', error)
   }
 }
 
@@ -380,19 +325,16 @@ export async function cancelAppointment(
   const supabase = createServerClient()
 
   try {
-    // 1. Obtener cita
     const { data: appointment } = await supabase
       .from('appointments')
       .select('*')
       .eq('id', appointmentId)
       .single()
 
-    // 2. Cancelar en Google Calendar
     if (appointment?.calendar_event_id) {
       await deleteCalendarEvent(appointment.calendar_event_id)
     }
 
-    // 3. Actualizar en Supabase
     await supabase
       .from('appointments')
       .update({
@@ -402,28 +344,12 @@ export async function cancelAppointment(
         updated_at: new Date().toISOString()
       })
       .eq('id', appointmentId)
-
-    // 4. Crear alerta
-    await supabase.from('owner_alerts').insert({
-      appointment_id: appointmentId,
-      alert_type: 'cancellation',
-      payload: {
-        reason,
-        freed_slot: appointment?.start_time,
-        service: appointment?.service_name
-      }
-    })
-
-    console.log('✅ Appointment cancelled:', appointmentId)
   } catch (error) {
-    console.error('❌ Error cancelling appointment:', error)
+    console.error('Error cancelling appointment:', error)
     throw error
   }
 }
 
-/**
- * Eliminar evento de Google Calendar
- */
 async function deleteCalendarEvent(eventId: string) {
   const accessToken = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN
 
@@ -440,6 +366,6 @@ async function deleteCalendarEvent(eventId: string) {
       }
     )
   } catch (error) {
-    console.error('❌ Error deleting calendar event:', error)
+    console.error('Error deleting calendar event:', error)
   }
 }

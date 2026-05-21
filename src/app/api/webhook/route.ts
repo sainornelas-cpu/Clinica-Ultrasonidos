@@ -1,39 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase/client'
-import { CONVERSATION_STATES, detectStateFromResponse } from '@/lib/constants/conversation-states'
+import { CONVERSATION_STATES } from '@/lib/constants/conversation-states'
+import { SERVICES, CLINIC_INFO, OWNER_ID } from '@/lib/constants/services'
 import OpenAI from 'openai'
 
-// WhatsApp Webhook Handler
+// =================== WEBHOOK HANDLERS ===================
+
 export async function GET(request: NextRequest) {
-  // 🔥 DEBUG AGRESIVO: Ver qué está pasando
-  const verifyTokenEnv = process.env.WHATSAPP_VERIFY_TOKEN
-  const searchParams = request.nextUrl.searchParams
+  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN
+  const hubMode = request.nextUrl.searchParams.get('hub.mode')
+  const hubVerifyToken = request.nextUrl.searchParams.get('hub.verify_token')
+  const hubChallenge = request.nextUrl.searchParams.get('hub.challenge')
 
-  const hubMode = searchParams.get('hub.mode')
-  const hubVerifyToken = searchParams.get('hub.verify_token')
-  const hubChallenge = searchParams.get('hub.challenge')
-
-  console.log('🔥 [WEBHOOK DEBUG] ========================')
-  console.log('🔥 WHATSAPP_VERIFY_TOKEN from env:', JSON.stringify(verifyTokenEnv))
-  console.log('🔥 Length:', verifyTokenEnv?.length)
-  console.log('🔥 hub.verify_token from Meta:', JSON.stringify(hubVerifyToken))
-  console.log('🔥 hub.mode:', hubMode)
-  console.log('🔥 Do they match EXACTLY?:', verifyTokenEnv === hubVerifyToken)
-  console.log('🔥 Do they match after trim?:', verifyTokenEnv?.trim() === hubVerifyToken?.trim())
-  console.log('🔥 [END DEBUG] ============================')
-
-  // ✅ FIX: Usar trim() para ignorar espacios invisibles
-  if (hubMode === 'subscribe' && verifyTokenEnv?.trim() === hubVerifyToken?.trim()) {
-    console.log('✅ Webhook verified! Challenge:', hubChallenge)
+  if (hubMode === 'subscribe' && verifyToken?.trim() === hubVerifyToken?.trim()) {
     return new NextResponse(hubChallenge, {
       status: 200,
       headers: { 'Content-Type': 'text/plain' }
     })
   }
-
-  console.error('❌ Verification FAILED')
-  console.error('Expected (env):', JSON.stringify(verifyTokenEnv))
-  console.error('Received (Meta):', JSON.stringify(hubVerifyToken))
 
   return new NextResponse('Forbidden', {
     status: 403,
@@ -42,90 +26,78 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  console.log('📨 Webhook POST hit - Incoming message')
-
   try {
     const body = await request.json()
-    console.log('📦 Received payload:', JSON.stringify(body, null, 2))
 
-    // Extraer mensaje de WhatsApp (estructura anidada de Meta)
+    // Extraer mensaje de WhatsApp
     const entry = body.entry?.[0]
     const changes = entry?.changes?.[0]
-    const value = changes?.value
-    const messages = value?.messages
+    const messages = changes?.value?.messages
 
-    if (!messages || messages.length === 0) {
-      console.log('⚠️ No messages in payload')
+    if (!messages?.length) {
       return new NextResponse('No messages', { status: 200 })
     }
 
     const message = messages[0]
-    const from = message.from // Número del usuario
+    const from = message.from
     const messageType = message.type
 
-    // Solo procesar mensajes de texto
     if (messageType !== 'text') {
-      console.log('⚠️ Ignoring non-text message')
       return new NextResponse('OK', { status: 200 })
     }
 
     const userMessage = message.text.body
-    console.log(`💬 Message from ${from}: ${userMessage}`)
-
-    // Obtener o crear usuario en Supabase
     const supabase = createServerClient()
 
-    // 1. Buscar usuario por teléfono
-    let { data: existingUser, error: userFetchError } = await supabase
+    // Obtener o crear usuario
+    let userId: string
+    const { data: existingUser } = await supabase
       .from('users')
       .select('id, full_name')
       .eq('phone_number', from)
-      .single()
-
-    let userId: string
+      .maybeSingle()
 
     if (existingUser) {
       userId = existingUser.id
     } else {
-      // 2. Crear nuevo usuario si no existe
-      const { data: newUser, error: insertError } = await supabase
+      const { data: newUser, error } = await supabase
         .from('users')
         .insert({
           phone_number: from,
           full_name: null,
           timezone: 'America/Mexico_City',
-          trust_score: 1.0
+          trust_score: 1.0,
+          conversation_state: CONVERSATION_STATES.IDLE
         })
         .select('id')
         .single()
 
-      if (insertError || !newUser) {
-        console.error('❌ Error creating user:', insertError)
+      if (error || !newUser) {
         return new NextResponse('DB Error', { status: 500 })
       }
-
       userId = newUser.id
-      console.log('✅ New user created:', userId)
     }
 
-    // Obtener estado de conversación actual - buscar última interacción del assistant
-    const { data: lastInteraction } = await supabase
+    // Obtener estado de conversación
+    const { data: userState } = await supabase
+      .from('users')
+      .select('conversation_state')
+      .eq('id', userId)
+      .maybeSingle()
+
+    const conversationState = userState?.conversation_state || CONVERSATION_STATES.IDLE
+
+    // Verificar si es primer mensaje
+    const { data: existingLogs } = await supabase
       .from('interaction_logs')
-      .select('state_after')
+      .select('id')
       .eq('user_id', userId)
-      .eq('role', 'assistant')
-      .order('created_at', { ascending: false })
       .limit(1)
-      .single()
 
-    const conversationState = lastInteraction?.state_after || CONVERSATION_STATES.IDLE
-    const isFirstMessage = !lastInteraction
+    const isFirstMessage = !existingLogs || existingLogs.length === 0
 
-    console.log(`💬 State: ${conversationState}, FirstMessage: ${isFirstMessage}`)
-
-    // Guardar mensaje del usuario en interaction_logs
-    console.log('📝 Guardando interaction log para usuario...')
-    const { error: logError } = await supabase.from('interaction_logs').insert({
+    // Guardar mensaje del usuario
+    await supabase.from('interaction_logs').insert({
       user_id: userId,
       role: 'user',
       content: userMessage,
@@ -134,153 +106,167 @@ export async function POST(request: NextRequest) {
       state_after: CONVERSATION_STATES.PROCESSING
     })
 
-    if (logError) {
-      console.error('❌ Error inserting interaction log:', logError)
-    } else {
-      console.log('✅ Interaction log guardado')
-    }
+    // Generar respuesta
+    const response = await generateResponse(userMessage, conversationState, userId, from, supabase, isFirstMessage)
 
-    // Generar respuesta basada en el contexto
-    let aiResponse: string
+    // Leer estado final y guardar respuesta del bot
+    const { data: finalState } = await supabase
+      .from('users')
+      .select('conversation_state')
+      .eq('id', userId)
+      .maybeSingle()
 
-    if (isFirstMessage) {
-      // Primer mensaje - mostrar bienvenida + menú
-      aiResponse = generateWelcomeMessage()
-    } else if (isMenuOption(userMessage)) {
-      // Opción del menú (1-5)
-      aiResponse = await handleMenuOption(userMessage, userId, from, supabase)
-    } else if (conversationState.startsWith(CONVERSATION_STATES.BOOKING_NAME.substring(0, 7))) {
-      // En medio del flujo de agendamiento
-      aiResponse = await handleBookingFlow(userMessage, conversationState, userId, from, supabase)
-    } else if (isGeneralCommand(userMessage)) {
-      // Comando general (Mis citas, Cancelar, Reagendar)
-      aiResponse = await handleGeneralCommand(userMessage, userId, supabase)
-    } else {
-      // Otro mensaje - usar OpenAI
-      aiResponse = await getOpenAIResponse(userMessage, conversationState, userId, supabase)
-    }
-
-    console.log(`🤖 Response: ${aiResponse}`)
-
-    // Guardar respuesta en interaction_logs
-    console.log('📝 Guardando interaction log para assistant...')
-
-    // Determinar el estado final correcto basado en la respuesta
-    const finalState = detectStateFromResponse(aiResponse)
-
-    const { error: assistantLogError } = await supabase.from('interaction_logs').insert({
+    await supabase.from('interaction_logs').insert({
       user_id: userId,
       role: 'assistant',
-      content: aiResponse,
+      content: response,
       intent_detected: 'response',
       state_before: conversationState,
-      state_after: finalState
+      state_after: finalState?.conversation_state || CONVERSATION_STATES.IDLE
     })
 
-    if (assistantLogError) {
-      console.error('❌ Error inserting assistant log:', assistantLogError)
-    } else {
-      console.log('✅ Assistant interaction log guardado')
-    }
-
-    // Enviar respuesta vía WhatsApp API
-    console.log('📤 Enviando respuesta a WhatsApp...')
-    await sendWhatsAppMessage(from, aiResponse)
+    // Enviar respuesta a WhatsApp
+    await sendWhatsAppMessage(from, response)
 
     return new NextResponse('OK', { status: 200 })
 
   } catch (error) {
-    console.error('❌ Error processing webhook:', error)
+    console.error('Webhook error:', error)
     return new NextResponse('Internal Server Error', { status: 500 })
   }
 }
 
-// Cargar system prompt desde archivo
-async function loadSystemPrompt(): Promise<string> {
-  try {
-    const fs = await import('fs/promises')
-    const path = await import('path')
-    const promptPath = path.join(process.cwd(), 'src', 'lib', 'prompts', 'agent-system.md')
-    return await fs.readFile(promptPath, 'utf-8')
-  } catch (error) {
-    console.error('⚠️ Could not load system prompt, using fallback')
-    return 'Eres un asistente útil de una clínica dental.'
-  }
-}
+// =================== RESPONSE GENERATION ===================
 
-// Enviar mensaje vía WhatsApp Cloud API
-async function sendWhatsAppMessage(to: string, message: string) {
-  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID
-
-  const response = await fetch(
-    `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: to,
-        type: 'text',
-        text: {
-          body: message
-        }
-      })
-    }
-  )
-
-  if (!response.ok) {
-    const error = await response.json()
-    console.error('❌ Error sending WhatsApp message:', error)
-    throw new Error('Failed to send WhatsApp message')
-  }
-
-  console.log('✅ WhatsApp message sent successfully')
-  return response.json()
-}
-
-// =================== CONVERSATION MANAGEMENT ===================
-
-// Detectar intención del mensaje
-function detectIntent(message: string, currentState: string): string {
+async function generateResponse(
+  message: string,
+  state: string,
+  userId: string,
+  phone: string,
+  supabase: any,
+  isFirstMessage: boolean
+): Promise<string> {
   const lowerMessage = message.toLowerCase().trim()
+  const wantsToBook = lowerMessage.includes('agendar') || lowerMessage.includes('cita') || lowerMessage.includes('reservar')
 
-  // Menu options
-  if (['1', '2', '3', '4', '5'].includes(lowerMessage)) {
-    return 'menu_selection'
+  // Prioridad 1: Flujo de agendamiento activo
+  if (state === CONVERSATION_STATES.BOOKING_NAME ||
+      state === CONVERSATION_STATES.BOOKING_SERVICE ||
+      state === CONVERSATION_STATES.BOOKING_DATE) {
+    return await handleBookingFlow(message, state, userId, supabase)
   }
 
-  // Commands
-  if (lowerMessage.includes('mis citas')) return 'view_appointments'
-  if (lowerMessage.includes('cancelar')) return 'cancel_appointment'
-  if (lowerMessage.includes('reagendar')) return 'reschedule_appointment'
-  if (lowerMessage.includes('agendar')) return 'book_appointment'
+  // Prioridad 2: Primer mensaje
+  if (isFirstMessage) {
+    return getWelcomeMessage()
+  }
 
-  // Booking flow
-  if (currentState === CONVERSATION_STATES.BOOKING_SERVICE) return 'select_service'
-  if (currentState === CONVERSATION_STATES.BOOKING_DATE) return 'select_date'
-  if (currentState === CONVERSATION_STATES.BOOKING_NAME) return 'provide_name'
+  // Prioridad 3: Usuario quiere agendar y está en idle
+  if (wantsToBook && state === CONVERSATION_STATES.IDLE) {
+    await updateConversationState(userId, CONVERSATION_STATES.BOOKING_NAME, supabase)
+    return getBookingNamePrompt()
+  }
 
-  return 'general_query'
+  // Prioridad 4: Opciones del menú
+  if (isMenuOption(message)) {
+    return await handleMenuOption(message, userId, supabase)
+  }
+
+  // Prioridad 5: Comandos generales
+  if (isGeneralCommand(message)) {
+    return await handleGeneralCommand(message, userId, supabase)
+  }
+
+  // Prioridad 6: Mensaje genérico en idle
+  if (state === CONVERSATION_STATES.IDLE) {
+    return getWelcomeMessage()
+  }
+
+  // Fallback: OpenAI
+  return await getOpenAIResponse(message, userId, supabase)
 }
 
-// Verificar si es una opción del menú (1-5)
-function isMenuOption(message: string): boolean {
-  return ['1', '2', '3', '4', '5'].includes(message.trim())
+// =================== FLOW HANDLERS ===================
+
+async function handleBookingFlow(message: string, state: string, userId: string, supabase: any): Promise<string> {
+  const trimmed = message.trim()
+
+  switch (state) {
+    case CONVERSATION_STATES.BOOKING_NAME:
+      await supabase.from('users').update({ full_name: trimmed }).eq('id', userId)
+      await updateConversationState(userId, CONVERSATION_STATES.BOOKING_SERVICE, supabase)
+      return getBookingServicePrompt()
+
+    case CONVERSATION_STATES.BOOKING_SERVICE:
+      const selectedService = SERVICES[trimmed]
+      if (!selectedService) {
+        return '❌ Opción no válida. Selecciona un número del 1 al 5.'
+      }
+      await saveBookingData(userId, 'service', JSON.stringify(selectedService), supabase)
+      await updateConversationState(userId, CONVERSATION_STATES.BOOKING_DATE, supabase)
+      return getBookingDatePrompt(selectedService)
+
+    case CONVERSATION_STATES.BOOKING_DATE:
+      const bookingData = await getBookingData(userId, supabase)
+      const service = JSON.parse(bookingData?.service || '{}')
+      const appointmentId = await createAppointment(userId, service.name, service.duration, trimmed, supabase)
+      await updateConversationState(userId, CONVERSATION_STATES.IDLE, supabase)
+      return getBookingConfirmation(service, trimmed, appointmentId)
+
+    default:
+      return getWelcomeMessage()
+  }
 }
 
-// Verificar si es un comando general
-function isGeneralCommand(message: string): boolean {
+async function handleMenuOption(option: string, userId: string, supabase: any): Promise<string> {
+  switch (option.trim()) {
+    case '1':
+      await updateConversationState(userId, CONVERSATION_STATES.BOOKING_NAME, supabase)
+      return getBookingNamePrompt()
+
+    case '2':
+      return getPricesMenu()
+
+    case '3':
+      return getServicesMenu()
+
+    case '4':
+      return getLocationInfo()
+
+    case '5':
+      return getHoursInfo()
+
+    default:
+      return 'Opción no válida. Responde con un número del 1 al 5.'
+  }
+}
+
+async function handleGeneralCommand(message: string, userId: string, supabase: any): Promise<string> {
   const lower = message.toLowerCase()
-  return lower.includes('mis citas') || lower.includes('cancelar') || lower.includes('reagendar')
+
+  if (lower.includes('mis citas')) {
+    return await getUserAppointments(userId, supabase)
+  }
+
+  if (lower.includes('cancelar')) {
+    const appointments = await getUserAppointments(userId, supabase)
+    return appointments.includes('No tienes citas') ? appointments :
+      `⚠️ **¿Cuál cita deseas cancelar?**\n\n${appointments}\n\nEscribe el número de la cita a cancelar.`
+  }
+
+  if (lower.includes('reagendar')) {
+    const appointments = await getUserAppointments(userId, supabase)
+    return appointments.includes('No tienes citas') ? appointments :
+      `🔄 **¿Cuál cita deseas reagendar?**\n\n${appointments}\n\nEscribe el número de la cita a reagendar.`
+  }
+
+  return '¿Cómo puedo ayudarte? Responde con el número de una opción del menú (1-5).'
 }
 
-// Mensaje de bienvenida con menú
-function generateWelcomeMessage(): string {
-  return `Hola, buenos días. Te atiende el asistente virtual del **Dr. Baltierres Ginecólogo Ultrasonido**. ¿En qué te puedo ayudar hoy?
+// =================== MESSAGE TEMPLATES ===================
+
+function getWelcomeMessage(): string {
+  return `Hola, buenos días. Te atiende el asistente virtual del **${CLINIC_INFO.name}**. ¿En qué te puedo ayudar hoy?
 
 📋 **Opciones disponibles:**
 1️⃣ Agendar cita
@@ -292,28 +278,65 @@ function generateWelcomeMessage(): string {
 *Responde con el número de la opción que necesitas.*`
 }
 
-// Manejar opción del menú
-async function handleMenuOption(option: string, userId: string, phone: string, supabase: any): Promise<string> {
-  switch (option.trim()) {
-    case '1':
-      // Iniciar flujo de agendamiento - actualizar estado
-      await updateConversationState(userId, CONVERSATION_STATES.BOOKING_NAME, supabase)
-      return `📅 **Para agendar tu cita, necesito algunos datos:**
+function getBookingNamePrompt(): string {
+  return `📅 **Para agendar tu cita, necesito algunos datos:**
 
 Por favor, escribe tu **nombre completo** para empezar.`
+}
 
-    case '2':
-      return `💰 **Tabla de precios:**
-• Consulta General: $500
-• Ultrasonido Ginecológico: $1,200
-• Control Prenatal: $800
-• Papanicolaou: $450
-• Consulta de Fertilidad: $900
+function getBookingServicePrompt(): string {
+  const servicesList = Object.entries(SERVICES)
+    .map(([num, s]) => `${num}. ${s.name} - ${s.price}`)
+    .join('\n')
+
+  return `✅ Nombre registrado.
+
+🦷 **Selecciona el servicio que necesitas:**
+
+${servicesList}
+
+Responde con el número del servicio.`
+}
+
+function getBookingDatePrompt(service: { name: string; price: string }): string {
+  return `📅 **Servicio seleccionado:** ${service.name} - ${service.price}
+
+Por favor, indica la **fecha y hora** deseada para tu cita.
+
+Ejemplo: *Mañana a las 10am* o *Viernes 25 de mayo a las 3pm*`
+}
+
+function getBookingConfirmation(
+  service: { name: string; price: string },
+  date: string,
+  appointmentId: string
+): string {
+  return `✅ **¡Cita confirmada!**
+
+📅 Fecha: ${date}
+🦷 Servicio: ${service.name}
+💰 Costo: ${service.price}
+
+Te esperamos en:
+📍 ${CLINIC_INFO.address}
+📞 ${CLINIC_INFO.phone}
 
 ¿Algo más en lo que te pueda ayudar?`
+}
 
-    case '3':
-      return `🏥 **Nuestros servicios:**
+function getPricesMenu(): string {
+  const pricesList = Object.entries(SERVICES)
+    .map(([_, s]) => `• ${s.name}: ${s.price}`)
+    .join('\n')
+
+  return `💰 **Tabla de precios:**
+${pricesList}
+
+¿Algo más en lo que te pueda ayudar?`
+}
+
+function getServicesMenu(): string {
+  return `🏥 **Nuestros servicios:**
 
 🦷 **Consulta General**
 Valoración general de salud ginecológica.
@@ -331,222 +354,46 @@ Detección temprana de cáncer cervical.
 Evaluación y tratamiento para la concepción.
 
 ¿Algo más en lo que te pueda ayudar?`
+}
 
-    case '4':
-      return `📍 **Ubicación:**
-Av. Principal #123, Colonia Centro
-Ciudad de México, CP 00000
+function getLocationInfo(): string {
+  return `📍 **Ubicación:**
+${CLINIC_INFO.address}
 
 🚗 Referencias: Frente al parque central, a 2 cuadras del metro Hidalgo
 🅿️ Estacionamiento: Disponible en entrada trasera
 
 ¿Algo más en lo que te pueda ayudar?`
+}
 
-    case '5':
-      return `⏰ **Horario de atención:**
+function getHoursInfo(): string {
+  return `⏰ **Horario de atención:**
 
-• Lunes a Viernes: 9:00 AM - 7:00 PM
-• Sábados: 9:00 AM - 2:00 PM
-• Domingos: Cerrado
+${CLINIC_INFO.hours}
 
 ¿Algo más en lo que te pueda ayudar?`
-
-    default:
-      return 'Opción no válida. Por favor, responde con un número del 1 al 5.'
-  }
 }
 
-// Manejar flujo de agendamiento
-async function handleBookingFlow(
-  message: string,
-  currentState: string,
-  userId: string,
-  phone: string,
-  supabase: any
-): Promise<string> {
-  console.log(`🔄 handleBookingFlow: currentState=${currentState}, message="${message.trim()}"`)
-  const trimmedMessage = message.trim()
+// =================== DATABASE OPERATIONS ===================
 
-  if (currentState === CONVERSATION_STATES.BOOKING_NAME) {
-    console.log('📝 Entrando en booking_name flow')
-    // Guardar nombre en perfil del usuario
-    await supabase
-      .from('users')
-      .update({ full_name: trimmedMessage })
-      .eq('id', userId)
-      .select()
-
-    // Mover al siguiente estado
-    await updateConversationState(userId, CONVERSATION_STATES.BOOKING_SERVICE, supabase)
-
-    return `✅ Nombre registrado: **${trimmedMessage}**
-
-🦷 **Selecciona el servicio que necesitas:**
-
-1. Consulta General - $500
-2. Ultrasonido Ginecológico - $1,200
-3. Control Prenatal - $800
-4. Papanicolaou - $450
-5. Consulta de Fertilidad - $900
-
-Responde con el número del servicio.`
-  }
-
-  if (currentState === CONVERSATION_STATES.BOOKING_SERVICE) {
-    const services: Record<string, { name: string; price: string; duration: number }> = {
-      '1': { name: 'Consulta General', price: '$500', duration: 30 },
-      '2': { name: 'Ultrasonido Ginecológico', price: '$1,200', duration: 45 },
-      '3': { name: 'Control Prenatal', price: '$800', duration: 40 },
-      '4': { name: 'Papanicolaou', price: '$450', duration: 30 },
-      '5': { name: 'Consulta de Fertilidad', price: '$900', duration: 60 }
-    }
-
-    const service = services[trimmedMessage]
-    if (!service) {
-      return '❌ Opción no válida. Por favor, selecciona un número del 1 al 5.'
-    }
-
-    // Guardar servicio en el estado (usando interaction_logs temporalmente)
-    await saveBookingData(userId, 'service', JSON.stringify(service), supabase)
-
-    // Mover al siguiente estado
-    await updateConversationState(userId, CONVERSATION_STATES.BOOKING_DATE, supabase)
-
-    return `📅 **Servicio seleccionado:** ${service.name} - ${service.price}
-
-Por favor, indica la **fecha y hora** deseada para tu cita.
-
-Ejemplo: *Mañana a las 10am* o *Viernes 25 de mayo a las 3pm*`
-  }
-
-  if (currentState === CONVERSATION_STATES.BOOKING_DATE) {
-    // Obtener datos de la cita en progreso
-    const bookingData = await getBookingData(userId, supabase)
-    const service = JSON.parse(bookingData?.service || '{}')
-
-    // Aquí normalmente parsearíamos la fecha y verificaríamos disponibilidad
-    // Por ahora, asumimos que la fecha es válida
-    const scheduledDate = trimmedMessage
-
-    // Crear la cita
-    const appointmentId = await createAppointmentInDb(
-      userId,
-      service.name,
-      service.duration,
-      scheduledDate,
-      supabase
-    )
-
-    // Resetear estado
-    await updateConversationState(userId, CONVERSATION_STATES.IDLE, supabase)
-
-    return `✅ **¡Cita confirmada!**
-
-📅 Fecha: ${scheduledDate}
-🦷 Servicio: ${service.name}
-💰 Costo: ${service.price}
-
-Te esperamos en:
-📍 Av. Principal #123, Colonia Centro
-📞 +52 555-123-4567
-
-¿Algo más en lo que te pueda ayudar?`
-  }
-
-  return 'Lo siento, hubo un error en el proceso. Para empezar de nuevo, escribe "1" o "Agendar cita".'
-}
-
-// Manejar comandos generales
-async function handleGeneralCommand(message: string, userId: string, supabase: any): Promise<string> {
-  const lower = message.toLowerCase()
-
-  if (lower.includes('mis citas')) {
-    return await getUserAppointments(userId, supabase)
-  }
-
-  if (lower.includes('cancelar')) {
-    // Flujo de cancelación
-    return await handleCancellation(userId, supabase)
-  }
-
-  if (lower.includes('reagendar')) {
-    // Flujo de reagendamiento
-    return await handleReschedule(userId, supabase)
-  }
-
-  return '¿Cómo puedo ayudarte? Responde con el número de una opción del menú (1-5).'
-}
-
-// Obtener citas del usuario
-async function getUserAppointments(userId: string, supabase: any): Promise<string> {
-  const { data: appointments } = await supabase
-    .from('appointments')
-    .select('*')
-    .eq('user_id', userId)
-    .in('status', ['confirmed', 'rescheduled'])
-    .order('start_time', { ascending: true })
-
-  if (!appointments || appointments.length === 0) {
-    return `📅 No tienes citas agendadas.
-
-¿Deseas agendar una nueva? Responde "1" o "Agendar cita".`
-  }
-
-  let response = `📅 **Tus citas agendadas:**\n\n`
-
-  appointments.forEach((apt: any, index: number) => {
-    const date = new Date(apt.start_time).toLocaleDateString('es-MX', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long'
-    })
-    const time = new Date(apt.start_time).toLocaleTimeString('es-MX', {
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-    const statusIcon = apt.status === 'confirmed' ? '✅' : '🔄'
-
-    response += `${statusIcon} **${index + 1}. ${date} - ${time}**\n`
-    response += `   🦷 ${apt.service_name}\n\n`
-  })
-
-  response += `Para reagendar o cancelar, escribe "Reagendar [número]" o "Cancelar [número]".`
-
-  return response
-}
-
-// Crear cita en base de datos
-async function createAppointmentInDb(
+async function createAppointment(
   userId: string,
   serviceName: string,
   duration: number,
   dateText: string,
   supabase: any
 ): Promise<string> {
-  // Parsear fecha simple (en producción usar una librería como date-fns)
   const startTime = new Date()
-  startTime.setDate(startTime.getDate() + 1) // Default: mañana
+  startTime.setDate(startTime.getDate() + 1)
   startTime.setHours(10, 0, 0, 0)
 
   const endTime = new Date(startTime.getTime() + duration * 60000)
-
-  // Generar UUID válido para owner_id
-  const ownerId = '00000000-0000-0000-0000-000000000001'
-
-  console.log(`📝 Creando cita en Supabase:`)
-  console.log(`   userId: ${userId}`)
-  console.log(`   serviceName: ${serviceName}`)
-  console.log(`   duration: ${duration}`)
-  console.log(`   startTime: ${startTime.toISOString()}`)
-  console.log(`   endTime: ${endTime.toISOString()}`)
-  console.log(`   ownerId: ${ownerId}`)
-  console.log(`   from('appointments'): '${supabase.from('appointments')}'`)
 
   const { data, error } = await supabase
     .from('appointments')
     .insert({
       user_id: userId,
-      owner_id: ownerId,
+      owner_id: OWNER_ID,
       service_id: serviceName.toLowerCase().replace(/\s+/g, '_'),
       service_name: serviceName,
       duration_minutes: duration,
@@ -560,31 +407,50 @@ async function createAppointmentInDb(
     .single()
 
   if (error) {
-    console.error('❌ Error creating appointment:', error)
-    console.error('❌ Error details:', JSON.stringify(error, null, 2))
     throw error
   }
 
-  console.log('✅ Cita creada exitosamente, ID:', data.id)
   return data.id
 }
 
-// Actualizar estado de conversación
-async function updateConversationState(userId: string, state: string, supabase: any) {
+async function getUserAppointments(userId: string, supabase: any): Promise<string> {
+  const { data: appointments } = await supabase
+    .from('appointments')
+    .select('*')
+    .eq('user_id', userId)
+    .in('status', ['confirmed', 'rescheduled'])
+    .order('start_time', { ascending: true })
+
+  if (!appointments?.length) {
+    return `📅 No tienes citas agendadas.\n\n¿Deseas agendar una nueva? Responde "1" o "Agendar cita".`
+  }
+
+  const appointmentsList = appointments.map((apt: any, i: number) => {
+    const date = new Date(apt.start_time).toLocaleDateString('es-MX', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long'
+    })
+    const time = new Date(apt.start_time).toLocaleTimeString('es-MX', {
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+    const statusIcon = apt.status === 'confirmed' ? '✅' : '🔄'
+    return `${statusIcon} **${i + 1}. ${date} - ${time}**\n   🦷 ${apt.service_name}`
+  }).join('\n\n')
+
+  return `📅 **Tus citas agendadas:**\n\n${appointmentsList}\n\nPara reagendar o cancelar, escribe "Reagendar [número]" o "Cancelar [número]".`
+}
+
+async function updateConversationState(userId: string, state: string, supabase: any): Promise<void> {
   try {
-    await supabase
-      .from('users')
-      .update({ conversation_state: state })
-      .eq('id', userId)
-      .select()
+    await supabase.from('users').update({ conversation_state: state }).eq('id', userId)
   } catch (error) {
-    console.warn('⚠️ Could not update conversation_state (column may not exist):', error)
+    console.warn('Could not update conversation_state:', error)
   }
 }
 
-// Guardar datos temporales de la cita
-async function saveBookingData(userId: string, key: string, value: string, supabase: any) {
-  // Usar interaction_logs para guardar datos temporales
+async function saveBookingData(userId: string, key: string, value: string, supabase: any): Promise<void> {
   await supabase.from('interaction_logs').insert({
     user_id: userId,
     role: 'system',
@@ -595,8 +461,7 @@ async function saveBookingData(userId: string, key: string, value: string, supab
   })
 }
 
-// Obtener datos de la cita en progreso
-async function getBookingData(userId: string, supabase: any) {
+async function getBookingData(userId: string, supabase: any): Promise<Record<string, string>> {
   const { data } = await supabase
     .from('interaction_logs')
     .select('content')
@@ -606,61 +471,50 @@ async function getBookingData(userId: string, supabase: any) {
     .limit(10)
 
   const result: Record<string, string> = {}
-
   if (data) {
     data.forEach((log: any) => {
-      // Usar non-greedy match (.*?) para capturar solo hasta el primer ":"
       const match = log.content.match(/^booking_data_(.+?):(.+)$/)
       if (match) {
         result[match[1]] = match[2]
       }
     })
   }
-
   return result
 }
 
-// Placeholder functions for cancellation and reschedule
-async function handleCancellation(userId: string, supabase: any): Promise<string> {
-  const appointments = await getUserAppointments(userId, supabase)
-  if (appointments.includes('No tienes citas')) {
-    return appointments
+async function sendWhatsAppMessage(to: string, message: string): Promise<void> {
+  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID
+
+  const response = await fetch(
+    `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to,
+        type: 'text',
+        text: { body: message }
+      })
+    }
+  )
+
+  if (!response.ok) {
+    throw new Error('Failed to send WhatsApp message')
   }
-
-  return `⚠️ **¿Cuál cita deseas cancelar?**
-
-${appointments}
-
-Escribe el número de la cita a cancelar, o "Cancelar" para volver.`
 }
 
-async function handleReschedule(userId: string, supabase: any): Promise<string> {
-  const appointments = await getUserAppointments(userId, supabase)
-  if (appointments.includes('No tienes citas')) {
-    return appointments
-  }
+// =================== OPENAI INTEGRATION ===================
 
-  return `🔄 **¿Cuál cita deseas reagendar?**
+async function getOpenAIResponse(message: string, userId: string, supabase: any): Promise<string> {
+  const systemPrompt = 'Eres un asistente útil de una clínica de ginecología y ultrasonido. Ayuda a los pacientes con información sobre servicios, citas y preguntas generales de salud.'
 
-${appointments}
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-Escribe el número de la cita a reagendar, o "Cancelar" para volver.`
-}
-
-// Obtener respuesta de OpenAI para consultas generales
-async function getOpenAIResponse(
-  message: string,
-  currentState: string,
-  userId: string,
-  supabase: any
-): Promise<string> {
-  const systemPrompt = await loadSystemPrompt()
-
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-  })
-
-  // Obtener historial de conversación para contexto
   const { data: history } = await supabase
     .from('interaction_logs')
     .select('role, content')
@@ -668,9 +522,7 @@ async function getOpenAIResponse(
     .order('created_at', { ascending: true })
     .limit(20)
 
-  const messages: { role: string; content: string }[] = [
-    { role: 'system', content: systemPrompt }
-  ]
+  const messages = [{ role: 'system', content: systemPrompt }]
 
   if (history) {
     history.forEach((log: any) => {
@@ -690,4 +542,30 @@ async function getOpenAIResponse(
   })
 
   return completion.choices[0].message.content || 'Lo siento, tuve un error. Intenta de nuevo.'
+}
+
+// =================== HELPERS ===================
+
+function detectIntent(message: string, currentState: string): string {
+  const lower = message.toLowerCase().trim()
+
+  if (['1', '2', '3', '4', '5'].includes(lower)) return 'menu_selection'
+  if (lower.includes('mis citas')) return 'view_appointments'
+  if (lower.includes('cancelar')) return 'cancel_appointment'
+  if (lower.includes('reagendar')) return 'reschedule_appointment'
+  if (lower.includes('agendar')) return 'book_appointment'
+  if (currentState === CONVERSATION_STATES.BOOKING_SERVICE) return 'select_service'
+  if (currentState === CONVERSATION_STATES.BOOKING_DATE) return 'select_date'
+  if (currentState === CONVERSATION_STATES.BOOKING_NAME) return 'provide_name'
+
+  return 'general_query'
+}
+
+function isMenuOption(message: string): boolean {
+  return ['1', '2', '3', '4', '5'].includes(message.trim())
+}
+
+function isGeneralCommand(message: string): boolean {
+  const lower = message.toLowerCase()
+  return lower.includes('mis citas') || lower.includes('cancelar') || lower.includes('reagendar')
 }
