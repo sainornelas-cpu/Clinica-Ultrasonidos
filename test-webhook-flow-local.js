@@ -75,7 +75,7 @@ async function getBookingData(userId) {
   if (data) {
     data.forEach((log) => {
       // Usar non-greedy match (.*?) para capturar solo hasta el primer ":"
-      const match = log.content.match(/^booking_data_(.+?):(.+)$/s)
+      const match = log.content.match(/^booking_data_(.+?):(.+)$/)
       if (match) {
         result[match[1]] = match[2]
       }
