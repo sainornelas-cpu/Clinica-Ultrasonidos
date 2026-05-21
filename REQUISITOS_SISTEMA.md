@@ -40,7 +40,7 @@ Bot de WhatsApp automatizado para agendar citas de ginecología y ultrasonido, c
 ### 2.3 Reglas de Agendamiento
 1. **Obligatorio**: Verificar disponibilidad antes de confirmar cita
 2. **No solapamiento**: No se pueden agendar citas en el mismo horario
-3. **Horario futuro**: Solo se pueden agendar fechas futuras (no pasado ni hoy)
+3. **⚠️ HORA FUTURA OBLIGATORIA**: NO permitir agendar en fecha/hora ANTERIOR AL MOMENTO DE SOLICITUD
 4. **Días cerrados**: No agendar en domingo (y feriados configurables)
 5. **Respeto de duración**: Cada servicio requiere su tiempo específico
 
@@ -148,13 +148,25 @@ USUARIO: [Fecha y hora, ej: "Mañana a las 10am"]
    ↓
 BOT VERIFICA DISPONIBILIDAD:
 
-1. Parsear fecha
-2. Verificar que sea fecha futura
+1. Parsear fecha y hora del mensaje
+2. ⚠️ VALIDAR FECHA FUTURA: La fecha/hora debe ser POSTERIOR al momento actual
 3. Verificar que no sea domingo
-4. Verificar horario dentro de clínica
-5. Verificar que no haya cita existente
+4. Verificar horario dentro de clínica (9:00-19:00 L-V, 9:00-14:00 Sáb)
+5. Verificar que no haya cita existente en ese horario
 
-SI DISPONIBLE:
+SI FECHA/HORA ES ANTERIOR O IGUAL A HOY:
+BOT: ❌ Esa fecha/hora ya pasó o es el día de hoy.
+
+     Por favor selecciona una fecha futura.
+     Los horarios disponibles:
+
+     • Mañana a las 10:00 AM
+     • Mañana a las 11:30 AM
+     • Viernes 23 de mayo a las 3:00 PM
+
+ESTADO: BOOKING_DATE (sin cambio)
+
+SI NO DISPONIBLE (horario ocupado):
 BOT: ✅ ¡Cita confirmada!
 
      📅 Fecha: [Fecha]
@@ -299,10 +311,14 @@ function checkAvailability(dateText: string, serviceDuration: number): {
 ```
 
 ### 6.2 Lógica
-1. **Parsear fecha**: Convertir texto humano a fecha real
-2. **Validar fecha futura**: Rechazar fechas de hoy o pasado
+1. **Parsear fecha**: Convertir texto humano a fecha real (ej: "Mañana 10am" → 2026-05-22 10:00)
+2. **⚠️ VALIDAR FECHA FUTURA (OBLIGATORIO)**:
+   - Comparar fecha parseada con `now()`
+   - Si fecha <= now, RECHAZAR
+   - Mensaje: "Esa fecha/hora ya pasó o es el día de hoy"
+   - Sugerir slots futuros disponibles
 3. **Validar horario clínica**:
-   - Rechazar si es domingo
+   - Rechazar si es domingo (day === 0)
    - Rechazar si está fuera de horario de operación
 4. **Consultar citas existentes**: `SELECT * FROM appointments WHERE date = [parsed_date]`
 5. **Calcular solapamiento**: Verificar si el slot solicitado se traslapa con alguna cita
