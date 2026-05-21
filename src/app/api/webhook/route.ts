@@ -160,7 +160,7 @@ async function generateResponse(
   if (state === CONVERSATION_STATES.BOOKING_NAME ||
       state === CONVERSATION_STATES.BOOKING_SERVICE ||
       state === CONVERSATION_STATES.BOOKING_DATE) {
-    return await handleBookingFlow(message, state, userId, supabase)
+    return await handleBookingFlow(message, state, userId, supabase, existingUser)
   }
 
   // Prioridad 2: Primer mensaje
@@ -196,42 +196,30 @@ async function generateResponse(
 // =================== FLOW HANDLERS ===================
 
 // Verifica si el mensaje es un comando que debe salir del flujo de booking
-function isBookingExitCommand(message: string): boolean {
+function isBookingExitCommand(message: string, state: string): boolean {
   const lower = message.toLowerCase().trim()
-  // Comandos que interrumpen el flujo de booking
-  return ['1', '2', '3', '4', '5', '6'].includes(message.trim()) ||
-         lower.includes('cancelar') ||
+
+  // En BOOKING_SERVICE, '1'-'5' son opciones válidas, NO comandos de salida
+  if (state === CONVERSATION_STATES.BOOKING_SERVICE) {
+    return ['1', '2', '3', '4', '5'].includes(message.trim()) ? false :
+           lower.includes('cancelar') ||
+           lower.includes('menú') ||
+           lower.includes('menu') ||
+           lower.includes('mis citas') ||
+           lower.includes('reagendar')
+  }
+
+  // En BOOKING_DATE, cualquier cosa que no sea fecha puede ser comando
+  return lower.includes('cancelar') ||
          lower.includes('menú') ||
          lower.includes('menu') ||
          lower.includes('mis citas') ||
          lower.includes('reagendar')
 }
 
-async function handleBookingFlow(message: string, state: string, userId: string, supabase: any): Promise<string> {
+async function handleBookingFlow(message: string, state: string, userId: string, supabase: any, existingUser?: { full_name: string | null } | null): Promise<string> {
   const trimmed = message.trim()
   const lower = message.toLowerCase().trim()
-
-  // ⚠️ VERIFICAR COMANDOS DE SALIDA ANTES DE PROCESAR
-  if (isBookingExitCommand(message)) {
-    // Salir del flujo de booking y regresar a idle
-    await updateConversationState(userId, CONVERSATION_STATES.IDLE, supabase)
-    // Procesar como comando de menú
-    if (['1', '2', '3', '4', '5', '6'].includes(trimmed)) {
-      return await handleMenuOption(trimmed, userId, supabase)
-    }
-    if (lower.includes('cancelar')) {
-      return await handleGeneralCommand('cancelar', userId, supabase)
-    }
-    if (lower.includes('mis citas')) {
-      return await handleGeneralCommand('mis citas', userId, supabase)
-    }
-    if (lower.includes('reagendar')) {
-      return await handleGeneralCommand('reagendar', userId, supabase)
-    }
-    if (lower.includes('menu') || lower.includes('menú')) {
-      return getWelcomeMessage() // Mostrar menú principal
-    }
-  }
 
   switch (state) {
     case CONVERSATION_STATES.BOOKING_NAME:
@@ -249,6 +237,18 @@ async function handleBookingFlow(message: string, state: string, userId: string,
       return getBookingDatePrompt(selectedService)
 
     case CONVERSATION_STATES.BOOKING_DATE:
+      // ⚠️ VERIFICAR COMANDOS DE SALIDA ANTES DE PROCESAR FECHA
+      if (isBookingExitCommand(message, state)) {
+        await updateConversationState(userId, CONVERSATION_STATES.IDLE, supabase)
+        if (lower.includes('menu') || lower.includes('menú')) {
+          return getWelcomeMessage(existingUser?.full_name)
+        }
+        if (lower.includes('mis citas')) {
+          return await getUserAppointments(userId, supabase)
+        }
+        return getWelcomeMessage(existingUser?.full_name)
+      }
+
       const bookingData = await getBookingData(userId, supabase)
       const service = JSON.parse(bookingData?.service || '{}')
 
@@ -273,7 +273,7 @@ async function handleBookingFlow(message: string, state: string, userId: string,
       return getBookingConfirmation(service, trimmed, appointmentId)
 
     default:
-      return getWelcomeMessage()
+      return getWelcomeMessage(existingUser?.full_name)
   }
 }
 
