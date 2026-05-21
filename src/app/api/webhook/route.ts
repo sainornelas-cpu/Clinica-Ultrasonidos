@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
     })
 
     // Generar respuesta
-    const response = await generateResponse(userMessage, conversationState, userId, from, supabase, isFirstMessage)
+    const response = await generateResponse(userMessage, conversationState, userId, from, supabase, isFirstMessage, existingUser)
 
     // Leer estado final y guardar respuesta del bot
     const { data: finalState } = await supabase
@@ -126,8 +126,13 @@ export async function POST(request: NextRequest) {
       state_after: finalState?.conversation_state || CONVERSATION_STATES.IDLE
     })
 
-    // Enviar respuesta a WhatsApp
-    await sendWhatsAppMessage(from, response)
+    // Enviar respuesta a WhatsApp (no fallar si no hay token)
+    try {
+      await sendWhatsAppMessage(from, response)
+    } catch (whatsappError) {
+      console.warn('WhatsApp message not sent (可能是测试环境):', whatsappError)
+      // En modo de prueba, no fallar
+    }
 
     return new NextResponse('OK', { status: 200 })
 
@@ -145,7 +150,8 @@ async function generateResponse(
   userId: string,
   phone: string,
   supabase: any,
-  isFirstMessage: boolean
+  isFirstMessage: boolean,
+  existingUser?: { id: string; full_name: string | null } | null
 ): Promise<string> {
   const lowerMessage = message.toLowerCase().trim()
   const wantsToBook = lowerMessage.includes('agendar') || lowerMessage.includes('cita') || lowerMessage.includes('reservar')
@@ -159,7 +165,7 @@ async function generateResponse(
 
   // Prioridad 2: Primer mensaje
   if (isFirstMessage) {
-    return getWelcomeMessage()
+    return getWelcomeMessage(existingUser?.full_name)
   }
 
   // Prioridad 3: Usuario quiere agendar y está en idle
@@ -254,8 +260,11 @@ async function handleMenuOption(option: string, userId: string, supabase: any): 
     case '5':
       return getHoursInfo()
 
+    case '6':
+      return await getUserAppointments(userId, supabase)
+
     default:
-      return 'Opción no válida. Responde con un número del 1 al 5.'
+      return 'Opción no válida. Responde con un número del 1 al 6.'
   }
 }
 
@@ -283,8 +292,9 @@ async function handleGeneralCommand(message: string, userId: string, supabase: a
 
 // =================== MESSAGE TEMPLATES ===================
 
-function getWelcomeMessage(): string {
-  return `Hola, buenos días. Te atiende el asistente virtual del **${CLINIC_INFO.name}**. ¿En qué te puedo ayudar hoy?
+function getWelcomeMessage(userName?: string | null): string {
+  const greeting = userName ? `¡Hola, ${userName}!` : `Hola, buenos días.`
+  return `${greeting} Te atiende el asistente virtual del **${CLINIC_INFO.name}**. ¿En qué te puedo ayudar hoy?
 
 📋 **Opciones disponibles:**
 1️⃣ Agendar cita
@@ -292,6 +302,7 @@ function getWelcomeMessage(): string {
 3️⃣ Servicios
 4️⃣ Ubicación
 5️⃣ Horario de atención
+6️⃣ Mis citas
 
 *Responde con el número de la opción que necesitas.*`
 }
